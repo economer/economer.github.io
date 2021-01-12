@@ -1,0 +1,289 @@
+---
+title: "make_data_set_interarrival"
+author: "S.H.Hosseini"
+date: "10/01/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# patient 
+
+```{r}
+# make df including the arrival of patients 
+# 
+# non-white, adult, bt of O (o_non_white_adult) 
+env_p <- simmer()
+t_o <- 
+  trajectory("o_non_white_adult") %>%
+  set_attribute("arrived_at", now(env_o)) %>%
+  log_(function() paste0("This P arrived at: ", round(now(env_o) - get_attribute(env_o,"arrived_at")))) %>%
+  seize(resource = "loc",amount = 1) %>%
+  #timeout(function() rnorm(1,20,5)) %>%
+  release(resource =  "loc",amount  = 1) %>%
+  log_(function() paste0("this P left at: ", round(now(env_o))) )
+  
+env_o %>%
+  add_resource(name = "loc",capacity = 1,mon = 2) %>%
+  add_generator(name_prefix = "Patient num: ", t_o,distribution = function() rexp(100,1/16),mon=2) %>%
+  run(until = 60)
+
+env_o %>%
+  get_mon_arrivals()
+
+env_o %>%
+  get_mon_resources() 
+
+env_o %>%
+  get_mon_attributes()
+```
+
+
+# create the attributes of patient and organ 
+```{r}
+
+## Pateint
+## p_start
+env_p <- simmer()
+patient <- 
+  trajectory("patient path") %>%
+  set_attribute("p_start",now(env_p)) %>%
+  set_attribute("p_score", function() sample(c(1,2,3,4,5),1,replace = T)) %>%
+  #seize("loc",1) %>%
+  log_(function() paste0(" arrived at: ", get_attribute(env_p,"p_start") %>% round())) %>%
+  timeout(function() rnorm(1,20,5)) %>%
+  set_attribute("p_start",function() round(now(env_p)-get_attribute(env_p,"p_start"),1)) %>%
+  #release("loc",1) %>%
+  log_(function() paste0(" lef at: ", get_attribute(env_p,"p_start") %>% round()))
+
+
+env_p %>%
+  #add_resource(name = "loc",mon = 2) %>%
+  add_generator("Patient No: ", patient, function() rexp(1,1/4),mon=2) %>%
+  run(until = 100)
+
+ env_p %>%
+  get_mon_arrivals()
+ 
+
+p_df_arrival <- env_p %>%
+  get_mon_arrivals() %>%
+  as.data.frame()
+ 
+p_df_attr <- env_p %>%
+  get_mon_attributes() %>%
+  as.data.frame() %>%
+  dplyr::filter(key=="p_score")
+
+
+p_df_joined <- dplyr::left_join(p_df_arrival,p_df_attr,by="name") %>%
+  dplyr::arrange(start_time)
+```
+
+
+```{r}
+## Organ
+## 
+env_o <- simmer()
+organ <- 
+  trajectory("organ path") %>%
+  set_attribute("o_start",now(env_o)) %>%
+  set_attribute("o_score", function() sample(c(1,2,3,4,5),1,replace = T)) %>%
+  log_(function() paste0(" arrived at: ", get_attribute(env_o,"o_start") %>% round())) %>%
+  #timeout(function() rnorm(1,0.5,0.2)) %>%
+  set_attribute("o_start",function() round(now(env_o)-get_attribute(env_o,"o_start"),1)) %>%
+  log_(function() paste0(" lef at: ", get_attribute(env_o,"o_start") %>% round()))
+
+
+env_o %>%
+  add_generator("Organ No: ", organ, function() rexp(1,1/20),mon=2) %>%
+  run(until = 100)
+
+env_o %>%
+  get_mon_arrivals()
+
+env_o %>%
+  get_mon_attributes() %>%
+  dplyr::filter(key=="_start") 
+
+o_df_arrival <- env_o %>%
+  get_mon_arrivals() %>%
+  as.data.frame()
+ 
+o_df_attr <- env_o %>%
+  get_mon_attributes() %>%
+  as.data.frame() %>%
+  dplyr::filter(key=="o_score")
+
+
+o_df_joined <- dplyr::left_join(o_df_arrival,o_df_attr,by="name") %>%
+  dplyr::arrange(start_time)
+
+
+### the matching algorithm: 
+## we should define a priority system using set_attribute and p_screo and o_score -> if p is greater than 
+# use set_prioritization()
+```
+# Bind organ and pateint 
+
+```{r}
+
+bind_p_o <- dplyr::bind_rows(p_df_joined,o_df_joined,.id = "df_id") %>%
+  dplyr::arrange(start_time) %>%
+  dplyr::select(df_id, name, start_time, end_time, activity_time, key, value )
+
+bind_p_o %>% 
+  tidyr::pivot_wider(names_from = "key", values_from = "value")
+```
+
+
+## Cloning 
+```{r}
+env_m <- simmer()
+match <- trajectory("matching path") %>%
+  clone(
+    n=2,
+    join(patient), join(organ)
+    ) %>%
+  set_attribute(keys = "match")
+
+env_m %>%
+  #add_resource(name = "loc",mon = 2) %>%
+  add_generator("it arrives at: ", trajectory = match,distribution = at(0),mon = 2) %>%
+  run(until = 100)
+
+env_m %>%
+  get_mon_arrivals()
+
+env_m %>%
+  get_mon_attributes()
+plot(match)
+```
+
+# Different trajectories and arrival times in similar environmet
+
+```{r}
+
+# set_attribute("matched",function() ifelse(get_attribute(env,"p_score" %in% c(get_attribute("o_score")-1, get_attribute("o_score")+1),1,0))) 
+
+
+patient <- 
+  trajectory("patient path") %>%
+  set_attribute("p_start",now(env_o_p)) %>%
+  set_attribute("p_score", function() sample(c(1,2,3,4,5),1,replace = T)) %>%
+  #seize("loc",1) %>%
+  log_(function() paste0(" arrived at: ", get_attribute(env_o_p,"p_start") %>% round())) %>%
+  timeout(function() rnorm(1,20,5)) %>%
+  set_attribute("p_start",function() round(now(env_o_p) -  get_attribute(env_o_p,"p_start"),1)) %>%
+  #release("loc",1) %>%
+  log_(function() paste0(" lef at: ", get_attribute(env_o_p,"p_start") %>% round()))
+
+
+organ <- 
+  trajectory("organ path") %>%
+  set_attribute("o_start",now(env_o_p)) %>%
+  set_attribute("o_score", function() sample(c(1,2,3,4,5),1,replace = T)) %>%
+  log_(function() paste0(" arrived at: ", get_attribute(env_o_p,"o_start") %>% round())) %>%
+  #timeout(function() rnorm(1,0.5,0.2)) %>%
+  set_attribute("o_start",function() round(now(env_o_p)-  get_attribute(env_o_p,"o_start"),1)) %>%
+  log_(function() paste0(" lef at: ", get_attribute(env_o_p,"o_start") %>% round()))
+
+env_o_p <- simmer()
+
+
+env_o_p %>%
+  add_generator("Organ No: ", organ,from(start_time = 0,function() rexp(1,1/20),arrive = T),mon=2) %>%
+    add_generator("Patient No: ", patient, from(start_time = 0,function() rexp(1,1/4),arrive = T),mon=2) %>%
+  run(until = 60)
+
+
+
+
+env_o_p %>%
+  get_mon_arrivals()
+
+attr_df <- env_o_p %>%
+  get_mon_attributes() %>%
+  dplyr::filter(!key %in% c("p_start","o_start"))
+
+
+attr_df %>%
+  mutate(matched = ifelse())
+
+
+```
+
+
+```{r}
+
+# the model: 
+#  For a specific year, blood type and region 
+#    
+# a Patient (P) arrives at a waiting list, 
+# P picks a location 
+# his score is calculated and based on the characteristics it will be given a priority 
+# P is also assigned a health status, based on the health status, we will have two branches where:
+# P either dies or continue to keep its prioritized location 
+# In both case we have to define the timeout in each branch 
+# if P dies he leaves the queue 
+# 
+# Graft is arrived it is also assigned a score and either 
+# 
+# 
+
+set.seed(123)
+env <- simmer()
+
+patient <- 
+  trajectory("patient path") %>% # P arrives 
+  
+  set_attribute("p_start", now(env)) %>%  # his arrival time is recorded
+  log_(function() paste0(" arrived at: ", get_attribute(env_o,"p_start") %>% round())) %>% # arrival is reported
+  
+  set_attribute("p_score", function() sample(c(1:100),1,replace = T)) %>% # set his score based on his tissue sample
+  
+  set_attribute("p_health", function() rnorm(1,0.6,0.2)) %>% #  set his health status, that is 0.6 on average  
+
+  set_attribute("p_priority", function() round(get_attribute(env, "p_score")/10,0)) %>% # priorities are set based on p_score 
+  log_(function() paste0("Patient priority score is ", get_attribute(env,"p_priority"))) %>%
+  set_prioritization(function() { 
+    prio <- get_prioritization(env) # in case wee need preepmtation we need prio[[2]]
+    attr <- get_attribute(env,"p_priority") # get attribute set above
+    c(attr,-1,F) # the first one is attribute, -1 is no preepmtation, F: set restart to F
+  }
+    ) %>% 
+  seize("loc",1) %>% # is assigned a location in the waiting list 
+  
+  
+  
+  # in this stage baed on the health status we have two branches 1- P continues his path, 2- he dies after some time of waiting 
+  branch()
+  
+  
+
+  # seize("loc",1) %>% # P seizes a location in the waiting list 
+  #   timeout(function() 10) %>%
+  #   release("loc",1)
+  #   
+  # #     set_attribute("p_start",function() round(now(env_o_p) -  get_attribute(env_o_p,"p_start"),1)) %>%
+  # log_(function() paste0(" lef at: ", get_attribute(env_o_p,"p_start") %>% round()))
+
+
+env %>%
+  add_generator("Patient No: ", patient, function() rexp(1,1/5)) %>%
+  run(until = 60)
+
+
+
+
+  
+
+
+
+round(rnorm(1,80,10)/10,0)
+
+
+```
+
